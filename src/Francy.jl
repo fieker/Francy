@@ -8,13 +8,16 @@ using JSON, IJulia
 const FrancyMimeString = "application/vnd.francy+json"
 const FrancyMime = MIME"application/vnd.francy+json"
 
+
+function __init__()
+  #once..
+  IJulia.register_mime(MIME(FrancyMimeString))
+
+  #useful for debugging Trigger...
+  #IJulia.set_verbose(true)
+end
+
 Base.istextmime(::FrancyMime) = true
-
-#once..
-IJulia.register_mime(MIME(FrancyMimeString))
-
-#useful for debugging Trigger...
-#IJulia.set_verbose(true)
 
 id_cnt = 0
 function create_id()
