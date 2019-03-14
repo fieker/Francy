@@ -1,6 +1,7 @@
 module Francy
 
-export canvas, graph, shape, link, menu, callback, message, Trigger
+export canvas, graph, node, link, menu, callback, message, Trigger, chart, 
+       dataset
 import Base.push!, Base.show
 
 using JSON, IJulia
@@ -8,13 +9,16 @@ using JSON, IJulia
 const FrancyMimeString = "application/vnd.francy+json"
 const FrancyMime = MIME"application/vnd.francy+json"
 
+
+function __init__()
+  #once..
+  IJulia.register_mime(MIME(FrancyMimeString))
+
+  #useful for debugging Trigger...
+  #IJulia.set_verbose(true)
+end
+
 Base.istextmime(::FrancyMime) = true
-
-#once..
-IJulia.register_mime(MIME(FrancyMimeString))
-
-#useful for debugging Trigger...
-#IJulia.set_verbose(true)
 
 id_cnt = 0
 function create_id()
@@ -44,11 +48,15 @@ mutable struct Chart <: FrancyType
   c::Dict
 end
 
+mutable struct Dataset <: FrancyType
+  d::Dict
+end
+
 mutable struct Callback <: FrancyType
   c::Dict
 end
 
-mutable struct Shape <: FrancyType
+mutable struct Node <: FrancyType
   s::Dict
 end
 
@@ -75,7 +83,8 @@ function canvas(t::String; width = 800, height = 600)
          :texTypesetting => false,
          :menus => Dict(),
          :messages => Dict(),
-         :graph => Dict()
+         :graph => Dict(),
+         :chart => Dict()
     ))
   
   global canvas_cache
@@ -88,14 +97,18 @@ end
   :tree
   :undirected
 =#
-function graph()
-  return Graph(Dict(:type => :directed,
+const graph_types = [:directed, :tree, :undirected]
+function graph(type = :directed)
+  type in graph_types || error("type has to be one of ", graph_types)
+  return Graph(Dict(:type => type,
               :id => create_id(),
               :simulation => false,
               :collapsed => true,
               :links => Dict(),
               :nodes => Dict(),
               :messages => Dict(), 
+              :drag => true,
+              :showNeighbours => false
               ))
 end
 
@@ -103,8 +116,22 @@ function push!(C::Canvas, G::Graph)
   if length(C.c[:graph]) > 0
     error("Graph already present")
   end
+  if length(C.c[:chart]) > 0
+    error("Chart already present")
+  end
   C.c[:graph] = G.g
 end
+
+function push!(C::Canvas, c::Chart)
+  if length(C.c[:graph]) > 0
+    error("Graph already present")
+  end
+  if length(C.c[:chart]) > 0
+    error("Chart already present")
+  end
+  C.c[:chart] = c.c
+end
+
 
 #= type can be
  :triangle
@@ -115,8 +142,10 @@ end
  :star
  :wye
 =#
-function shape(n::String, type::Symbol = :circle)
-  return Shape(Dict(:type => type,
+const node_types = [:triangle, :diamond, :circle, :square, :cross, :star, :wye]
+function node(n::String, type::Symbol = :circle)
+  type in node_types || error("type has to be one of ", node_types)
+  return Node(Dict(:type => type,
               :id => create_id(),
               :size => 10,
               :x => 0,
@@ -131,7 +160,7 @@ function shape(n::String, type::Symbol = :circle)
               ))
 end
 
-function link(s::Shape, t::Shape; title = "", length = 0, weight = 0)
+function link(s::Node, t::Node; title = "", length = 0, weight = 0)
   return Link(Dict(:id => create_id(),
               :source => s.s[:id],
               :target => t.s[:id],
@@ -143,7 +172,7 @@ function link(s::Shape, t::Shape; title = "", length = 0, weight = 0)
               ))
 end
 
-function push!(G::Graph, S::Shape)
+function push!(G::Graph, S::Node)
   G.g[:nodes][S.s[:id]] = S.s
 end
 
@@ -156,10 +185,12 @@ end
   :context -> mouse event, right click or context-menu
   :dblclick -> mouse event, double click
 =#
-function callback(f::String, a::String)
+const trigger_types = [:click, :context, :dblclick]
+function callback(f::String, a::String, t = :click)
+  t in trigger_types || error("Trigger can only be one of ", trigger_types)
   return Callback(Dict(:id => create_id(),
               :func => f,
-              :trigger => :click,
+              :trigger => t,
               :knownArgs => a,
               :requiredArgs => Dict()
               ))
@@ -177,13 +208,13 @@ end
 
 push!(C::Canvas, M::Menu) = add(:menus, C.c, M.m)
 push!(G::Graph, M::Menu) = add(:menus, G.g, M.m)
-push!(S::Shape, M::Menu) = add(:menus, S.s, M.m)
+push!(S::Node, M::Menu) = add(:menus, S.s, M.m)
 
 push!(C::Canvas, M::Message) = add(:messages, C.c, M.m)
 push!(G::Graph, M::Message) = add(:messages, G.g, M.m)
-push!(S::Shape, M::Message) = add(:messages, S.s, M.m)
+push!(S::Node, M::Message) = add(:messages, S.s, M.m)
 
-push!(S::Shape, C::Callback) = add(:callbacks, S.s, C.c)
+push!(S::Node, C::Callback) = add(:callbacks, S.s, C.c)
 
 
 #= type can be
@@ -193,7 +224,9 @@ push!(S::Shape, C::Callback) = add(:callbacks, S.s, C.c)
   :warning
   :default
 =#
+const message_types = [:info, :error, :success, :warning, :default]
 function message(s::String, t::Symbol = :default)
+  t in message_types || error("type must be one of ", message_types)
   return Message(Dict(:id => create_id(),
               :type => t,
               :title => s,
@@ -210,6 +243,45 @@ function canvas(id::Symbol)
   return canvas_cache[string(id)].value
 end
 
+
+#= scale can be :linear, :band
+=#
+const axis_type = [:linear, :band]
+
+function axis(dom::Array, title::String, scale::Symbol = :linear)
+  scale in axis_type || error("scale must be one of ", axis_type)
+  return Dict(:domain => dom,
+              :title => title,
+              :scale => scale
+              )
+end
+
+#= type can be :line, :bar, :scatter
+  =#
+
+const chart_types = [:line, :bar, :scatter]  
+function chart(type::Symbol = :linel)
+  type in chart_types || error("type must be one of ", chart_types)
+  return Chart(Dict(
+    :id => create_id(),
+    :data => Dict(),
+    :axis => Dict(:x => axis([], "x", :linear),
+                  :y => axis([], "y", :linear)),
+    :type => type,
+    :labels => false,
+    :legend => ""
+    ))
+end
+
+function dataset(t::String, d::Array)
+  return Dataset(Dict(:title => t, :data => d))
+end
+
+add_data(d::Dict, e::Dict) = d[:data][e[:title]] = e[:data]
+push!(c::Chart, d::Dataset) = add_data(c.c, d.d)
+push!(c::Chart, d::Tuple{String, Array}) = add_data(c.c, dataset(d[1], d[2]).d)
+
+
 #=
  THE MAGIC!
 Trigger from java script when a call back is executed...
@@ -224,6 +296,13 @@ function Trigger(a::String)  #needs to be in global scope
   c = b["func"] * "(" * b["knownArgs"] * ")"
   res = Core.eval(Main, Meta.parse(c))
 end  
+
+#= TODO
+ maybe
+   replace the functions by id and store the actual functions in
+   a dictionary
+   the fun will be to make it memory safe.
+=#   
 
 end
 
